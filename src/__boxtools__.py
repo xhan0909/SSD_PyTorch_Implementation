@@ -4,43 +4,66 @@ import itertools
 from collections import defaultdict
 
 
-def extract_metadata(json_path: str):
-    """Make dictionaries:
-    bounding boxes: {img_id:[(cat_id, bbox), (cat_id, bbox), ...]}
-    categories: {id: category_name}
+# Bounding boxes
+def make_bb_px(y, x):
+    """Makes an image of size x retangular bounding box"""
+    r, c, *_ = x.shape
+    Y = np.zeros((r, c))
+    y = hw_bb(y).astype(np.int)
+    Y[y[0]:y[2], y[1]:y[3]] = 1.
+    return Y
+
+
+def to_bb(Y):
     """
-    anno_json = json.load(open(json_path))
-    anno_dict = defaultdict(list)
-    categories = {d['id']: d['name'] for d in anno_json['categories']}
-    for anno in anno_json['annotations']:
-        if not anno['ignore']:
-            bb = np.array(anno['bbox'])
-            anno_dict[anno['image_id']].append(
-                (anno['category_id'], bb))
-    return anno_dict, categories
+    Convert mask Y to a bounding box
+    Assumes 0 as background nonzero object
+    """
+    cols, rows = np.nonzero(Y)
+    if len(cols) == 0: return np.zeros(4, dtype=np.float32)
+    top_row = np.min(rows)
+    left_col = np.min(cols)
+    bottom_row = np.max(rows)
+    right_col = np.max(cols)
+    return np.array([left_col, top_row, right_col, bottom_row],
+                    dtype=np.float32)
 
 
-def save_model(m, p):
-    torch.save(m.state_dict(), p)
+def hw_bb(bb):
+    """Transform from width-height format to bounding box format.
+
+    width-height: [X, Y, width, height]
+    bounding-box: [Y, X, left-bottom, right-top]
+    """
+    return np.array([bb[1], bb[0], bb[3] + bb[1] - 1, bb[2] + bb[0] - 1])
 
 
-def load_model(m, p):
-    checkpoint = torch.load(p)
-    m.load_state_dict(checkpoint)
-    del checkpoint
-    torch.cuda.empty_cache()
+def bb_hw(a):
+    """Transform from bounding box format to width-height format.
+
+    width-height: [X, Y, width, height]
+    bounding-box: [Y, X, left-bottom, right-top]
+    """
+    return np.array([a[1], a[0], a[3] - a[1] + 1, a[2] - a[0] + 1])
 
 
-def set_trainable_attr(m, b=True):
-    for p in m.parameters():
-        p.requires_grad = b
+def hw_center(bb):
+    """Given x-y-width-height format return cx-cy-height-width format."""
+    w, h = bb[2], bb[3]
+    cx = bb[0] + w/2
+    cy = bb[1] + h/2
+    return np.array([cx, cy, h, w])
 
 
-def unfreeze(model, l):
-    top_model = model.top_model
-    set_trainable_attr(top_model[l])
+def center_hw(bb):
+    """Given cx-cy-height-width format return x-y-width-height format."""
+    w, h = bb[3], bb[2]
+    x = bb[0] - w/2
+    y = bb[1] - h/2
+    return np.array([x, y, w, h])
 
 
+# Prior boxes
 def generate_ssd_priors(specs, image_size=300, clip=True):
     """Generate SSD Prior Boxes.
 
@@ -151,7 +174,7 @@ def iou_of(gt, pred, epsilon=1e-5):
 
 def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
     """ Match the prior box with ground-truth bounding boxes.
-    (1) for every ground-truth box:
+    (1) for every ground-truth box (target):
             match the ground-truth box with prior having the biggest IoU
     (2) for every prior:
             ious = IoU(prior, ground_truth_boxes)
@@ -171,24 +194,83 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
     # size: num_priors x num_targets
-    ious = iou_of(gt_boxes.unsqueeze(0), corner_form_priors.unsqueeze(1))
-    # size: num_priors
-    best_target_per_prior, best_target_per_prior_index = ious.max(1)
-    # size: num_targets
+    ious = iou_of(gt_boxes.unsqueeze(0), priors.unsqueeze(1))
+
+    # (1) size: num_targets
     best_prior_per_target, best_prior_per_target_index = ious.max(0)
+
+    # (2) size: num_priors
+    best_target_per_prior, best_target_per_prior_index = ious.max(1)
 
     for target_index, prior_index in enumerate(best_prior_per_target_index):
         best_target_per_prior_index[prior_index] = target_index
 
-    # 2.0 is used to make sure every target has a prior assigned
+    # 2 is used to make sure every target has a prior assigned
+    # tensor.index_fill_(dim, index, val)
     best_target_per_prior.index_fill_(0, best_prior_per_target_index, 2)
 
     # size: num_priors
     labels = gt_labels[best_target_per_prior_index]
-    labels[best_target_per_prior < iou_threshold] = 20  # the backgournd id
+    labels[best_target_per_prior < iou_threshold] = 0  # the background id
     boxes = gt_boxes[best_target_per_prior_index]
 
     return boxes, labels
+
+
+def convert_locations_to_boxes(locations, priors, center_variance,
+                               size_variance):
+    """Convert regression prediction (cx, cy, h, w) to real boxes
+    based on prior boxes.
+
+    Conversion formula:
+        $$predicted\_center * center_variance
+            = \frac{real\_center - prior\_center}{prior\_hw}$$
+        $$exp(predicted\_hw * size_variance) = \frac{real\_hw}{prior\_hw}$$
+
+    Args:
+        locations: output of SSD regression [batch_size, n_priors, 4]
+                   box is in center form (cx, cy, h, w)
+        priors: prior boxes [batch_size, n_priors, 4]
+                box is in center form (cx, cy, h, w)
+        center_variance: float
+        size_variance: float
+    Returns:
+        real boxes
+    """
+    pred_center, pred_hw = locations[:, :2], locations[:, 2:]
+    prior_center, prior_hw = priors[:, :2], priors[:, 2:]
+    real_center = pred_center * center_variance * prior_center + prior_center
+    real_hw = torch.exp(pred_hw * size_variance) * prior_hw
+
+    return torch.cat((real_center, real_hw), dim=0)
+
+
+def convert_boxes_to_locations(center_form_boxes, priors,
+                               center_variance, size_variance):
+    """Convert real boxes to locations (cx, cy, h, w) based on prior boxes.
+
+    Conversion formula:
+        $$predicted\_center * center_variance
+            = \frac{real\_center - prior\_center}{prior\_hw}$$
+        $$exp(predicted\_hw * size_variance) = \frac{real\_hw}{prior\_hw}$$
+
+    Args:
+        center_form_boxes: real boxes [batch_size, n_priors, 4]
+                           box is in center form (cx, cy, h, w)
+        priors: prior boxes [batch_size, n_priors, 4]
+                            box is in center form (cx, cy, h, w)
+        center_variance: float
+        size_variance: float
+
+    Returns:
+        locations
+    """
+    real_center, real_hw = center_form_boxes[:, :2], center_form_boxes[:, 2:]
+    prior_center, prior_hw = priors[:, :2], priors[:, 2:]
+    pred_center = (real_center - prior_center) / prior_hw / center_variance
+    pred_hw = torch.log(real_hw / prior_hw) / size_variance
+
+    return torch.cat((pred_center, pred_hw), dim=0)
 
 
 def hard_nm(box_scores, iou_threshold, top_k=-1, candidate_size=200):

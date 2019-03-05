@@ -1,3 +1,4 @@
-# Application of Single Shot Multibox Detector (SSD) to Pascal VOC2007
+# Single Shot Multibox Detector (SSD) implemented in PyTorch (in progress)
 
-In progress.
+## Dataset:
+[The PASCAL Visual Object Classes Challenge 2007](http://host.robots.ox.ac.uk/pascal/VOC/voc2007/)

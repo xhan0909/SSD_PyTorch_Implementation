@@ -1,3 +1,3 @@
 # SSD_pascal
 
-Application of SSD to Pascal VOC dataset (in progress)
+Application of Single Shot Multibox Detector (SSD) to Pascal VOC dataset (in progress)

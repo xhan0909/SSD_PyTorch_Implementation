@@ -1,9 +1,15 @@
+import cv2
+import numpy as np
+
+from ..transform import __imgtools__, __boxtools__, augmentation
+
+
 class multiBboxDataset(Dataset):
     def __init__(self, root, dataset, transform=False, target_transform=None,
                  sz=img_size, is_test=False):
         self.root = Path(root)
         self.dataset = self.make_anno_dict(dataset)
-        self.sz = img_size
+        self.sz = sz
         self.transform = transform
         self.target_transform = target_transform
         self.is_test = is_test
@@ -29,7 +35,7 @@ class multiBboxDataset(Dataset):
             if not isinstance(boxes, np.ndarray):
                 boxes = np.array(boxes)
             locations, labels = self.target_transform(boxes, labels)
-        image = normalize(image)
+        image = __boxtools__.normalize(image)
         return image.transpose(2, 0, 1), labels, locations
 
     def tsfm(self, x, bbox, size):
@@ -39,29 +45,32 @@ class multiBboxDataset(Dataset):
             Y.append(make_bb_px(b, x))
 
         # rotate
-        x_resize = cv2.resize(x, (self.sz, self.sz))
-        x_rot = rotate_cv(x_resize, random_degree)
+        x = cv2.resize(x, (size, size))
+        x_rot = augmentation.rotate_cv(x, random_degree)
         Y_rot = [None] * len(Y)
-        for i, b in enumerate(Y):
-            y_resize = cv2.resize(b, (self.sz, self.sz))
-            Y_rot[i] = rotate_cv(y_resize, random_degree, bbox=True)
+        for i, y in enumerate(Y):
+            y = cv2.resize(y, (size, size))
+            Y_rot[i] = augmentation.rotate_cv(y, random_degree, bbox=True)
 
         # random flip
-        if np.random.random() > 0.5:
+        if np.random.random() > .5:
             x_flip = np.fliplr(x_rot).copy()
-            Y_flip = np.fliplr(np.array(Y_rot)).copy()
-
-            Y_flip = np.array([bb_hw(to_bb(y)) for y in Y_flip])
-            _, Y_flip, _ = __boxtools__.to_percent_coords(x_flip, Y_flip)
+            Y_flip = []
+            for i, y in enumerate(Y_rot):
+                Y_flip.append(__boxtools__.bb_hw(
+                    __boxtools__.to_bb(np.fliplr(y).copy())))
+            _, Y_flip, _ = __boxtools__.to_percent_coords(x_flip,
+                                                          np.array(Y_flip))
             return x_flip, Y_flip
 
-        Y_rot = np.array([bb_hw(to_bb(y)) for y in Y_rot])
+        Y_rot = np.array([__boxtools__.bb_hw(
+            __boxtools__.to_bb(y)) for y in Y_rot])
         _, Y_rot, _ = __boxtools__.to_percent_coords(x_rot, Y_rot)
         return x_rot, Y_rot
 
     def get_image(self, index):
         image_path = str(self.root / self.dataset[index]['img_name'])
-        image = load_image(image_path)
+        image = __imgtools__.load_image(image_path)
         return image
 
     def make_anno_dict(self, df):

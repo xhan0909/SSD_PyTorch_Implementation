@@ -1,4 +1,5 @@
 import torch
+import math
 import numpy as np
 import itertools
 from collections import defaultdict
@@ -301,6 +302,32 @@ def convert_boxes_to_locations(center_form_boxes, priors,
     pred_hw = torch.log(real_hw / prior_hw) / size_variance
 
     return torch.cat((pred_center, pred_hw), dim=1)
+
+
+def hard_negative_mining(loss, labels, neg_pos_ratio):
+    """
+    It used to suppress the presence of a large number of negative prediction.
+    It works on image level not batch level.
+    For any example/image, it keeps all the positive predictions and
+     cut the number of negative predictions to make sure the ratio
+     between the negative examples and positive examples is no more
+     the given ratio for an image.
+    Args:
+        loss (N, num_priors): the loss for each example.
+        labels (N, num_priors): the labels.
+        neg_pos_ratio:  the ratio between the negative examples and positive examples.
+
+    Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
+    """
+    pos_mask = labels > 0
+    num_pos = pos_mask.long().sum(dim=1, keepdim=True)
+    num_neg = num_pos * neg_pos_ratio
+
+    loss[pos_mask] = -math.inf
+    _, indexes = loss.sort(dim=1, descending=True)
+    _, orders = indexes.sort(dim=1)
+    neg_mask = orders < num_neg
+    return pos_mask | neg_mask
 
 
 def hard_nm(box_scores, iou_threshold, top_k=-1, candidate_size=200):

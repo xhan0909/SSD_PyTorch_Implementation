@@ -6,10 +6,9 @@ from collections import defaultdict
 
 
 # Bounding boxes
-def make_bb_px(y, x):
+def make_bb_px(y, x_shape):
     """Makes an image of size x rectangular bounding box"""
-    r, c, *_ = x.shape
-    Y = np.zeros((r, c))
+    Y = np.zeros(x_shape)
     y = hw_bb(y).astype(np.int)
     Y[y[0]:y[2], y[1]:y[3]] = 1.
     return Y
@@ -17,7 +16,7 @@ def make_bb_px(y, x):
 
 def to_bb(Y):
     """
-    Convert mask Y to a bounding box
+    Convert mask Y to a corner format bounding box
     Assumes 0 as background nonzero object
     """
     cols, rows = np.nonzero(Y)
@@ -31,29 +30,40 @@ def to_bb(Y):
 
 
 def hw_bb(bb):
-    """Transform from width-height format to bounding box format.
+    """Transform from width-height format to corner format.
 
     width-height: [X, Y, width, height]
-    bounding-box: [Y, X, left-bottom, right-top]
+    corner format: [Y, X, left-bottom, right-top]
     """
     return np.array([bb[1], bb[0], bb[3] + bb[1] - 1, bb[2] + bb[0] - 1])
 
 
 def bb_hw(a):
-    """Transform from bounding box format to width-height format.
+    """Transform from corner format to width-height format.
 
     width-height: [X, Y, width, height]
-    bounding-box: [Y, X, left-bottom, right-top]
+    corner format: [Y, X, left-bottom, right-top]
     """
     return np.array([a[1], a[0], a[3] - a[1] + 1, a[2] - a[0] + 1])
 
 
-def hw_center(bb):
-    """Given x-y-width-height format return cx-cy-height-width format."""
-    w, h = bb[2], bb[3]
-    cx = bb[0] + w/2
-    cy = bb[1] + h/2
+def bb_center(bb):
+    """Given corner format [Y, X, left-bottom, right-top]
+    return cx-cy-height-width format."""
+    w, h = bb[3]-bb[1], bb[2]-bb[0]
+    cx = bb[1] + w/2
+    cy = bb[0] + h/2
     return np.array([cx, cy, h, w])
+
+
+def center_bb(bb):
+    """Given cx-cy-height-width format
+    return corner format [Y, X, left-bottom, right-top]."""
+    w, h = bb[3], bb[2]
+    x = bb[0] - w/2
+    y = bb[1] - h/2
+    lb, rt = y+h, x+w
+    return np.array([y, x, lb, rt])
 
 
 def center_hw(bb):
@@ -62,6 +72,14 @@ def center_hw(bb):
     x = bb[0] - w/2
     y = bb[1] - h/2
     return np.array([x, y, w, h])
+
+
+def hw_center(bb):
+    """Given x-y-width-height format return cx-cy-height-width format."""
+    w, h = bb[2], bb[3]
+    cx = bb[0] + w/2
+    cy = bb[1] + h/2
+    return np.array([cx, cy, h, w])
 
 
 def to_absolute_coords(image, boxes=None, labels=None):
@@ -86,23 +104,23 @@ def to_percent_coords(image, boxes=None, labels=None):
 
 # Prior boxes
 def generate_ssd_priors(specs, image_size=300, clip=True):
-    """Generate SSD Prior Boxes.
+    """
+    Generate center format SSD Prior Boxes.
 
-    Args:
-        specs: Specs about the shapes of sizes of prior boxes. i.e.
-            specs = [
-                Spec(38, 8, SSDBoxSizes(30, 60), [2]),
-                Spec(19, 16, SSDBoxSizes(60, 111), [2, 3]),
-                Spec(10, 32, SSDBoxSizes(111, 162), [2, 3]),
-                Spec(5, 64, SSDBoxSizes(162, 213), [2, 3]),
-                Spec(3, 100, SSDBoxSizes(213, 264), [2]),
-                Spec(1, 300, SSDBoxSizes(264, 315), [2])
-            ]
-        image_size: image size.
+    :param specs: Specs about the shapes of sizes of prior boxes. i.e.
+                    specs = [
+                        Spec(38, 8, SSDBoxSizes(30, 60), [2]),
+                        Spec(19, 16, SSDBoxSizes(60, 111), [2, 3]),
+                        Spec(10, 32, SSDBoxSizes(111, 162), [2, 3]),
+                        Spec(5, 64, SSDBoxSizes(162, 213), [2, 3]),
+                        Spec(3, 100, SSDBoxSizes(213, 264), [2]),
+                        Spec(1, 300, SSDBoxSizes(264, 315), [2])
+                    ]
+    :param image_size: image size.
+    :param clip: boolean
 
-    Returns:
-        priors: a list of priors: [[center_x, center_y, h, w]]. All the values
-                are relative to the image size (300x300).
+    :return: a list of priors: [[center_x, center_y, h, w]].
+             All the values are relative to the image size (300x300).
 
     Source: https://medium.com/@smallfishbigsea/understand-ssd-and-implement-your-own-caa3232cd6ad
     """
@@ -160,41 +178,42 @@ def generate_ssd_priors(specs, image_size=300, clip=True):
 
 
 def area_of(left_top, right_bottom) -> torch.Tensor:
-    """Compute the areas of rectangles given two corners.
-    Args:
-        left_top (N, 2): left top corner (x, y).
-        right_bottom (N, 2): right bottom corner (x+width, y+height).
-    Returns:
-        area (N): return the area.
+    """
+    Compute the areas of rectangles given two corners.
+
+    :param left_top: left top corner (x, y)
+    :param right_bottom: right bottom corner (x+width, y+height)
+    :return: the area
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
     hw = torch.clamp(right_bottom - left_top, min=0.0)
-    return hw[:, :, 0] * hw[:, :, 1]
+    return hw[..., 0] * hw[..., 1]
 
 
-def iou_of(gt, pred, epsilon=1e-5):
-    """Return intersection-over-union (Jaccard index) of boxes.
-    Args:
-        gt (N, 4): ground truth boxes.
-        pred (N or 1, 4): predicted boxes.
-        epsilon: a small number to avoid 0 as denominator.
-    Returns:
-        iou (N): IoU values.
+def iou_of(gt, pred, epsilon=1e-10):
+    """
+    Return intersection-over-union (Jaccard index) of boxes.
+
+    :param gt: ground truth boxes [Y, X, left-bottom, right-top]
+    :param pred: predicted boxes [Y, X, left-bottom, right-top]
+    :param epsilon: a small number to avoid 0 as denominator.
+    :return: IoU values.
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
-    overlap_left_top = torch.max(gt[:, :, :2], pred[:, :, :2])
-    overlap_right_bottom = torch.min(gt[:, :, 2:], pred[:, :, 2:])
+    overlap_left_top = torch.max(gt[..., :2], pred[..., :2])
+    overlap_right_bottom = torch.min(gt[..., 2:], pred[..., 2:])
 
     overlap_area = area_of(overlap_left_top, overlap_right_bottom)
-    area_gt = area_of(gt[:, :, :2], gt[:, :, 2:])
-    area_pred = area_of(pred[:, :, :2], pred[:, :, 2:])
+    area_gt = area_of(gt[..., :2], gt[..., 2:])
+    area_pred = area_of(pred[..., :2], pred[..., 2:])
     return overlap_area / (area_gt + area_pred - overlap_area + epsilon)
 
 
-def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
-    """ Match the prior box with ground-truth bounding boxes.
+def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold=0.5):
+    """
+    Match the prior box with ground-truth bounding boxes.
     (1) for every ground-truth box (target):
             match the ground-truth box with prior having the biggest IoU
     (2) for every prior:
@@ -203,14 +222,13 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
             if max_iou > threshold:
                 i = argmax(ious)
                 match the prior with ground_truth_boxes[i]
-    Args:
-        gt_boxes (num_targets, 4): ground truth boxes.
-        gt_labels (num_targets): labels of targets.
-        priors (num_priors, 4): corner form, (left_top, right_bottom)
-        iou_threshold (float): IoU threshold
 
-    Returns:
-        boxes (num_priors, 4): real values for priors.
+    :param gt_boxes: ground truth boxes, [Y, X, left-bottom, right-top]
+    :param gt_labels: labels of targets, [Y, X, left-bottom, right-top]
+    :param priors: corner format prior boxes, [Y, X, left-bottom, right-top]
+    :param iou_threshold: IoU threshold, default 0.5
+    :return:
+        boxes (num_priors, 4): real values for priors, corner format
         labels (num_priros): labels for priors.
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
@@ -229,9 +247,9 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
     for target_index, prior_index in enumerate(best_prior_per_target_index):
         best_target_per_prior_index[prior_index] = target_index
 
-    # 2 is used to make sure every target has a prior assigned
+    # 1 is used to make sure every target has a prior assigned
     # tensor.index_fill_(dim, index, val)
-    best_target_per_prior.index_fill_(0, best_prior_per_target_index, 2)
+    best_target_per_prior.index_fill_(0, best_prior_per_target_index, 1)
 
     # size: num_priors
     labels = gt_labels[best_target_per_prior_index]
@@ -242,7 +260,8 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold):
 
 def convert_locations_to_boxes(locations, priors, center_variance,
                                size_variance):
-    """Convert regression prediction (cx, cy, h, w) to real boxes
+    """
+    Convert regression prediction (cx, cy, h, w) to real boxes
     based on prior boxes.
 
     Conversion formula:
@@ -250,15 +269,13 @@ def convert_locations_to_boxes(locations, priors, center_variance,
             = \frac{real\_center - prior\_center}{prior\_hw}$$
         $$exp(predicted\_hw * size_variance) = \frac{real\_hw}{prior\_hw}$$
 
-    Args:
-        locations: output of SSD regression [batch_size, n_priors, 4]
+    :param locations: output of SSD regression [batch_size, n_priors, 4]
+                      box is in center form (cx, cy, h, w)
+    :param priors: prior boxes [batch_size, n_priors, 4]
                    box is in center form (cx, cy, h, w)
-        priors: prior boxes [batch_size, n_priors, 4]
-                box is in center form (cx, cy, h, w)
-        center_variance: float
-        size_variance: float
-    Returns:
-        real boxes
+    :param center_variance: float
+    :param size_variance: float
+    :return: real boxes [cx, cy, width, height]
     """
     if not isinstance(priors, torch.Tensor):
         priors = torch.from_numpy(priors)
@@ -274,23 +291,21 @@ def convert_locations_to_boxes(locations, priors, center_variance,
 
 def convert_boxes_to_locations(center_form_boxes, priors,
                                center_variance, size_variance):
-    """Convert real boxes to locations (cx, cy, h, w) based on prior boxes.
+    """
+    Convert real boxes to locations (cx, cy, h, w) based on prior boxes.
 
     Conversion formula:
         $$predicted\_center * center_variance
             = \frac{real\_center - prior\_center}{prior\_hw}$$
         $$exp(predicted\_hw * size_variance) = \frac{real\_hw}{prior\_hw}$$
 
-    Args:
-        center_form_boxes: real boxes [batch_size, n_priors, 4]
-                           box is in center form (cx, cy, h, w)
-        priors: prior boxes [batch_size, n_priors, 4]
-                            box is in center form (cx, cy, h, w)
-        center_variance: float
-        size_variance: float
-
-    Returns:
-        locations
+    :param center_form_boxes: real boxes [batch_size, n_priors, 4]
+                              box is in center form (cx, cy, h, w)
+    :param priors: prior boxes [batch_size, n_priors, 4]
+                   box is in center form (cx, cy, h, w)
+    :param center_variance: float
+    :param size_variance: float
+    :return: locations [cx, cy, width, height]
     """
     if not isinstance(priors, torch.Tensor):
         priors = torch.from_numpy(priors)
@@ -312,10 +327,11 @@ def hard_negative_mining(loss, labels, neg_pos_ratio):
      cut the number of negative predictions to make sure the ratio
      between the negative examples and positive examples is no more
      the given ratio for an image.
-    Args:
-        loss (N, num_priors): the loss for each example.
-        labels (N, num_priors): the labels.
-        neg_pos_ratio:  the ratio between the negative examples and positive examples.
+
+    :param loss: the loss for each example.
+    :param labels: the labels.
+    :param neg_pos_ratio: the ratio between the negative examples and positive examples.
+    :return: boolean mask
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
@@ -332,13 +348,11 @@ def hard_negative_mining(loss, labels, neg_pos_ratio):
 
 def hard_nm(box_scores, iou_threshold, top_k=-1, candidate_size=200):
     """
-    Args:
-        box_scores (N, 5): boxes in corner-form and probabilities.
-        iou_threshold: intersection over union threshold.
-        top_k: keep top_k results. If k <= 0, keep all the results.
-        candidate_size: only consider the candidates with the highest scores.
-    Returns:
-         boxes_to_keep: a list of indexes of the kept boxes
+    :param box_scores: boxes in corner-form and probabilities.
+    :param iou_threshold: intersection over union threshold.
+    :param top_k: keep top_k results. If k <= 0, keep all the results.
+    :param candidate_size: only consider the candidates with the highest scores.
+    :return: a list of indexes of the kept boxes
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """

@@ -42,7 +42,7 @@ def rotate_cv(im, deg, bbox=False,
 
 def tsfm_img_bb(x, bbox, size=300):
     """Make consistent transformation of an image and its bounding boxes."""
-    random_degree = (np.random.random()-.50)*20
+    random_degree = (np.random.random() - .50) * 20
     Y = make_bb_px(bbox, x)
 
     # resize

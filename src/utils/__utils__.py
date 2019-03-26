@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import itertools
 from collections import defaultdict
+from typing import *
 
 
 def extract_metadata(json_path: str):

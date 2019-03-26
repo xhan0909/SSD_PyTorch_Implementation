@@ -281,8 +281,8 @@ def convert_locations_to_boxes(locations, priors, center_variance,
         priors = torch.from_numpy(priors)
     if priors.dim() == locations.dim() - 1:
         priors = priors.unsqueeze(0)
-    pred_center, pred_hw = locations[:, :2], locations[:, 2:]
-    prior_center, prior_hw = priors[:, :2], priors[:, 2:]
+    pred_center, pred_hw = locations[..., :2], locations[..., 2:]
+    prior_center, prior_hw = priors[..., :2], priors[..., 2:]
     real_center = pred_center * center_variance * prior_center + prior_center
     real_hw = torch.exp(pred_hw * size_variance) * prior_hw
 
@@ -346,8 +346,10 @@ def hard_negative_mining(loss, labels, neg_pos_ratio):
     return pos_mask | neg_mask
 
 
-def hard_nm(box_scores, iou_threshold, top_k=-1, candidate_size=200):
+def nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
     """
+    Non-Maximum Suppression.
+
     :param box_scores: boxes in corner-form and probabilities.
     :param iou_threshold: intersection over union threshold.
     :param top_k: keep top_k results. If k <= 0, keep all the results.
@@ -373,6 +375,6 @@ def hard_nm(box_scores, iou_threshold, top_k=-1, candidate_size=200):
             rest_boxes,
             current_box.unsqueeze(0),
         )
-        indexes = indexes[iou <= iou_threshold]
+        indexes = indexes[iou > iou_threshold]
 
     return box_scores[boxes_to_keep, :]

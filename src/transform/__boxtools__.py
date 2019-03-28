@@ -35,71 +35,87 @@ def hw_bb(bb):
     width-height: [X, Y, width, height]
     corner format: [Y, X, left-bottom, right-top]
     """
-    return np.array([bb[1], bb[0], bb[3] + bb[1] - 1, bb[2] + bb[0] - 1])
+    return np.array([bb[..., 1], bb[..., 0],
+                     bb[..., 3] + bb[..., 1] - 1,
+                     bb[..., 2] + bb[..., 0] - 1])
 
 
-def bb_hw(a):
+def bb_hw(bb):
     """Transform from corner format to width-height format.
 
     width-height: [X, Y, width, height]
     corner format: [Y, X, left-bottom, right-top]
     """
-    return np.array([a[1], a[0], a[3] - a[1] + 1, a[2] - a[0] + 1])
+    return np.array([bb[..., 1], bb[..., 0],
+                     bb[..., 3] - bb[..., 1] + 1,
+                     bb[..., 2] - bb[..., 0] + 1])
 
 
 def bb_center(bb):
     """Given corner format [Y, X, left-bottom, right-top]
     return cx-cy-height-width format."""
-    w, h = bb[3]-bb[1], bb[2]-bb[0]
-    cx = bb[1] + w/2
-    cy = bb[0] + h/2
+    w, h = bb[..., 3]-bb[..., 1], bb[..., 2]-bb[..., 0]
+    cx = bb[..., 1] + w/2
+    cy = bb[..., 0] + h/2
+    if len(bb.shape) > 1:
+        return torch.cat([cx.unsqueeze(1), cy.unsqueeze(1),
+                          h.unsqueeze(1), w.unsqueeze(1)], dim=-1)
     return np.array([cx, cy, h, w])
 
 
 def center_bb(bb):
     """Given cx-cy-height-width format
     return corner format [Y, X, left-bottom, right-top]."""
-    w, h = bb[3], bb[2]
-    x = bb[0] - w/2
-    y = bb[1] - h/2
+    w, h = bb[..., 3], bb[..., 2]
+    x = bb[..., 0] - w/2
+    y = bb[..., 1] - h/2
     lb, rt = y+h, x+w
+    if len(bb.shape) > 1:
+        return torch.cat([y.unsqueeze(1), x.unsqueeze(1),
+                          lb.unsqueeze(1), rt.unsqueeze(1)], dim=-1)
     return np.array([y, x, lb, rt])
 
 
 def center_hw(bb):
     """Given cx-cy-height-width format return x-y-width-height format."""
-    w, h = bb[3], bb[2]
-    x = bb[0] - w/2
-    y = bb[1] - h/2
+    w, h = bb[..., 3], bb[..., 2]
+    x = bb[..., 0] - w/2
+    y = bb[..., 1] - h/2
+    if len(bb.shape) > 1:
+        return torch.cat([x.unsqueeze(1), y.unsqueeze(1),
+                          w.unsqueeze(1), h.unsqueeze(1)], dim=-1)
     return np.array([x, y, w, h])
 
 
 def hw_center(bb):
     """Given x-y-width-height format return cx-cy-height-width format."""
-    w, h = bb[2], bb[3]
-    cx = bb[0] + w/2
-    cy = bb[1] + h/2
+    w, h = bb[..., 2], bb[..., 3]
+    cx = bb[..., 0] + w/2
+    cy = bb[..., 1] + h/2
+    if len(bb.shape) > 1:
+        return torch.cat([cx.unsqueeze(1), cy.unsqueeze(1),
+                          h.unsqueeze(1), w.unsqueeze(1)], dim=-1)
     return np.array([cx, cy, h, w])
 
 
-def to_absolute_coords(image, boxes=None, labels=None):
-    height, width, channels = image.shape
-    boxes[:, 0] *= width
-    boxes[:, 2] *= width
-    boxes[:, 1] *= height
-    boxes[:, 3] *= height
+def to_absolute_coords(image_shape, boxes=None, labels=None):
+    height, width = image_shape
+    boxes[..., 0] *= width
+    boxes[..., 2] *= width
+    boxes[..., 1] *= height
+    boxes[..., 3] *= height
 
-    return image, boxes, labels
+    return boxes, labels
 
 
-def to_percent_coords(image, boxes=None, labels=None):
-    height, width, channels = image.shape
-    boxes[:, 0] /= width
-    boxes[:, 2] /= width
-    boxes[:, 1] /= height
-    boxes[:, 3] /= height
+def to_percent_coords(image_shape, boxes=None, labels=None):
+    height, width = image_shape
+    boxes[..., 0] /= width
+    boxes[..., 2] /= width
+    boxes[..., 1] /= height
+    boxes[..., 3] /= height
 
-    return image, boxes, labels
+    return boxes, labels
 
 
 # Prior boxes
@@ -278,7 +294,8 @@ def convert_locations_to_boxes(locations, priors, center_variance,
     :return: real boxes [cx, cy, width, height]
     """
     if not isinstance(priors, torch.Tensor):
-        priors = torch.from_numpy(priors)
+        priors = torch.from_numpy(priors).float()
+
     if priors.dim() == locations.dim() - 1:
         priors = priors.unsqueeze(0)
     pred_center, pred_hw = locations[..., :2], locations[..., 2:]
@@ -358,23 +375,22 @@ def nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
-    scores = box_scores[:, -1]
-    boxes = box_scores[:, :-1]
+    probs = box_scores[:, -1] # predicted probability of each box
+    boxes = box_scores[:, :4] # box location
     boxes_to_keep = []
-    _, indexes = scores.sort(descending=True)
+    _, indexes = probs.sort(descending=True)
     indexes = indexes[:candidate_size]
     while len(indexes) > 0:
-        current = indexes[0]
+        current, indexes = indexes[0], indexes[1:]
         boxes_to_keep.append(current.item())
         if 0 < top_k == len(boxes_to_keep) or len(indexes) == 1:
             break
         current_box = boxes[current, :]
-        indexes = indexes[1:]
         rest_boxes = boxes[indexes, :]
         iou = iou_of(
             rest_boxes,
             current_box.unsqueeze(0),
         )
-        indexes = indexes[iou > iou_threshold]
+        indexes = indexes[iou <= iou_threshold]
 
     return box_scores[boxes_to_keep, :]

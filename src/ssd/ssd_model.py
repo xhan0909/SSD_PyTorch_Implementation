@@ -5,10 +5,11 @@ from torchvision import models
 
 
 class SSDNet(nn.Module):
-    def __init__(self, num_classes=21, is_val=False):
+    def __init__(self, num_classes=21, im_shape=(300, 300), is_test=False):
         super(SSDNet, self).__init__()
         self.num_classes = num_classes
-        self.is_val = is_val
+        self.im_shape = im_shape
+        self.is_test = is_test
         # 1: vgg16 (0-22), 512x38x38
         vgg16 = models.vgg16(pretrained=True)
         for param in vgg16.parameters():
@@ -103,8 +104,8 @@ class SSDNet(nn.Module):
         locations = []
         X = self.top_model(X)
         # 1
-        X1_o = self.bn1(X)
-        X1 = nn.Dropout2d(0.5)(X1_o)
+        X1 = self.bn1(X)
+        # X1 = nn.Dropout2d(0.1)(X1_o)
         X1_cls = self.cls1_conv(X1)
         X1_reg = self.reg1_conv(X1)
         X1_conf = X1_cls.permute(0, 2, 3, 1).contiguous()
@@ -114,8 +115,8 @@ class SSDNet(nn.Module):
         confidences.append(X1_conf)
         locations.append(X1_location)
         # 2
-        X2_o = self.extra2(X1_o)
-        X2 = nn.Dropout2d(0.5)(X2_o)
+        X2 = self.extra2(X1)
+        # X2 = nn.Dropout2d(0.1)(X2_o)
         X2_cls = self.cls2_conv(X2)
         X2_reg = self.reg2_conv(X2)
         X2_conf = X2_cls.permute(0, 2, 3, 1).contiguous()
@@ -125,8 +126,8 @@ class SSDNet(nn.Module):
         confidences.append(X2_conf)
         locations.append(X2_location)
         # 3
-        X3_o = self.extra3(X2_o)
-        X3 = nn.Dropout2d(0.5)(X3_o)
+        X3 = self.extra3(X2)
+        # X3 = nn.Dropout2d(0.1)(X3_o)
         X3_cls = self.cls3_conv(X3)
         X3_reg = self.reg3_conv(X3)
         X3_conf = X3_cls.permute(0, 2, 3, 1).contiguous()
@@ -136,8 +137,8 @@ class SSDNet(nn.Module):
         confidences.append(X3_conf)
         locations.append(X3_location)
         # 4
-        X4_o = self.extra4(X3_o)
-        X4 = nn.Dropout2d(0.5)(X4_o)
+        X4 = self.extra4(X3)
+        # X4 = nn.Dropout2d(0.1)(X4_o)
         X4_cls = self.cls4_conv(X4)
         X4_reg = self.reg4_conv(X4)
         X4_conf = X4_cls.permute(0, 2, 3, 1).contiguous()
@@ -147,8 +148,8 @@ class SSDNet(nn.Module):
         confidences.append(X4_conf)
         locations.append(X4_location)
         # 5
-        X5_o = self.extra5(X4_o)
-        X5 = nn.Dropout2d(0.5)(X5_o)
+        X5 = self.extra5(X4)
+        # X5 = nn.Dropout2d(0.1)(X5_o)
         X5_cls = self.cls5_conv(X5)
         X5_reg = self.reg5_conv(X5)
         X5_conf = X5_cls.permute(0, 2, 3, 1).contiguous()
@@ -158,8 +159,8 @@ class SSDNet(nn.Module):
         confidences.append(X5_conf)
         locations.append(X5_location)
         # 6
-        X6_o = self.extra6(X5_o)
-        X6 = nn.Dropout2d(0.5)(X6_o)
+        X6 = self.extra6(X5)
+        # X6 = nn.Dropout2d(0.1)(X6_o)
         X6_cls = self.cls6_conv(X6)
         X6_reg = self.reg6_conv(X6)
         X6_conf = X6_cls.permute(0, 2, 3, 1).contiguous()

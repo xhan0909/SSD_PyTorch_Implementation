@@ -3,7 +3,7 @@ import random
 import numpy as np
 
 
-def normalize(self, img):
+def normalize(im):
     """Normalize images with Imagenet stats."""
     imagenet_stats = np.array([[0.485, 0.456, 0.406], [0.229, 0.224, 0.225]])
     return (im - imagenet_stats[0])/imagenet_stats[1]

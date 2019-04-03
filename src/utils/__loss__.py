@@ -54,3 +54,31 @@ def multibox_loss(confidence, predicted_locations, labels, gt_locations, priors,
     torch.cuda.empty_cache()
 
     return smooth_l1_loss, classification_loss
+
+
+def val_metrics_multibox(model, valid_dl, priors):
+    model.eval()
+    total = len(valid_dl)
+    sum_l1_loss = 0
+    sum_ce_loss = 0
+    sum_loss = 0
+
+    for i, (x, y_label, y_loc) in enumerate(valid_dl):
+        x = x.cuda().float()
+        y_label = y_label.cuda().long()
+        y_loc = y_loc.cuda().float()
+
+        with torch.no_grad():
+            confidences, locations = model(x)
+            l1_loss, ce_loss = multibox_loss(confidences, locations, y_label,
+                                             y_loc, priors,
+                                             num_classes=21, neg_pos_ratio=3)
+            loss = l1_loss + ce_loss
+
+        sum_loss += loss.item()
+        sum_l1_loss += l1_loss.item()
+        sum_ce_loss += ce_loss.item()
+
+        torch.cuda.empty_cache()
+    print(f"Valid L1 loss {(sum_l1_loss/total):.3f} | CE loss: "
+          f"{sum_ce_loss/total:.3f} | Total Loss: {sum_loss/total}")

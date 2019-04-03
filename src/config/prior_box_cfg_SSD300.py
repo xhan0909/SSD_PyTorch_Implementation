@@ -1,8 +1,10 @@
 import collections
 
+center_variance = 0.1
+size_variance = 0.2
+iou_threshold = 0.5
 
 SSDBoxSizes = collections.namedtuple('SSDBoxSizes', ['min', 'max'])
-
 Spec = collections.namedtuple('Spec',
                               ['feature_map_size', 'shrinkage',
                                'box_sizes', 'aspect_ratios'])

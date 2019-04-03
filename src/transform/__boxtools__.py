@@ -41,6 +41,18 @@ def hw_bb(bb: torch.Tensor) -> torch.Tensor:
                       bb[..., 2] + bb[..., 0] - 1], dim=-1)
 
 
+def bb_hw_numpy(bb: np.array) -> np.array:
+    """Transform from corner format to width-height format.
+    (Numpy version)
+
+    width-height: [X, Y, width, height]
+    corner format: [Y_0, X_0, Y_right_bottom, X_right_bottom]
+    """
+    return np.array([bb[..., 1], bb[..., 0],
+                      bb[..., 3] - bb[..., 1] + 1,
+                      bb[..., 2] - bb[..., 0] + 1], dtype=np.float32)
+
+
 def bb_hw(bb: torch.Tensor) -> torch.Tensor:
     """Transform from corner format to width-height format.
 
@@ -72,7 +84,6 @@ def center_bb(bb: torch.Tensor) -> torch.Tensor:
     lb, rt = y+h, x+w
     if len(bb.shape) > 1:
         return torch.stack([y, x, lb, rt], dim=-1)
-    # print(y.shape, x.shape, lb.shape, rt.shape)
     return torch.Tensor([y, x, lb, rt])
 
 
@@ -244,9 +255,6 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold=0.5):
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
-    # if not isinstance(priors, torch.Tensor):
-    #     priors = torch.from_numpy(priors).cuda()
-
     # size: num_priors x num_targets
     ious = iou_of(gt_boxes.unsqueeze(0), priors.unsqueeze(1))
 
@@ -290,11 +298,6 @@ def convert_locations_to_boxes(locations, priors, center_variance,
     :param size_variance: float
     :return: real boxes [cx, cy, width, height]
     """
-    # if not isinstance(locations, torch.Tensor):
-    #     locations = torch.from_numpy(locations).float().cuda()
-    # if not isinstance(priors, torch.Tensor):
-    #     priors = torch.from_numpy(priors).float().cuda()
-
     if priors.dim() == locations.dim() - 1:
         priors = priors.unsqueeze(0)
 
@@ -324,8 +327,6 @@ def convert_boxes_to_locations(center_form_boxes, priors,
     :param size_variance: float
     :return: locations [cx, cy, width, height]
     """
-    # if not isinstance(priors, torch.Tensor):
-    #     priors = torch.from_numpy(priors).cuda(non_blocking=True)
     if priors.dim() == center_form_boxes.dim() - 1:
         priors = priors.unsqueeze(0)
 

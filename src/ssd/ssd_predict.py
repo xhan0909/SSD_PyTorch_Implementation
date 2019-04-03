@@ -2,31 +2,16 @@ import numpy as np
 
 
 def predict(im_shape, locations, confidences, priors, top_k=-1,
-            score_threshold=.3, prob_threshold=.5, iou_threshold=.5,
-            candidate_size=200, sigma=.5, nms_type='hard'):
-    """ Convert (confidence, location) predictions to (box, class, prob)
-    as the final prediction that can be used to calculate metrics.
-
-    :param im_shape: image shape
-    :param locations: location predictions out of the model
-    :param confidences: confidence predictions out of the model
-    :param priors: prior boxes
-    :param top_k: the minimum number of boxes to keep
-    :param score_threshold: soft_nms, boxes with scores less than value are not considered.
-    :param prob_threshold: boxes with probs less than this value are not considered.
-    :param iou_threshold: IoU threshold (drop larger ious)
-    :param candidate_size: top n candidates to look at
-    :param sigma: soft_nms, sigma for the Gaussian penalty
-    :param nms_type: 'hard' or 'soft'
-
-    :return: (box, class, prob)
-    """
-    # this version of hard nm prediction is faster on CPU
+            score_threshold=.3,
+            prob_threshold=.5, iou_threshold=.5, candidate_size=200, sigma=.5,
+            nms_type='hard'):
+    # this version of hard_nms is slower on GPU, so we move data to CPU.
     cpu_device = torch.device("cpu")
     locations = locations.to(cpu_device)
     confidences = confidences.to(cpu_device)
+    priors = priors.to(cpu_device)
 
-    # convert locations to boxes(hw)
+    # convert
     bb_real = __boxtools__.convert_locations_to_boxes(
         __boxtools__.bb_center(locations),
         priors,
@@ -35,8 +20,6 @@ def predict(im_shape, locations, confidences, priors, top_k=-1,
                                                boxes=bb_real,
                                                labels=None)
     boxes = __boxtools__.center_hw(boxes.squeeze()).float()
-
-    # Apply softmax on confidence to make [0, 1] probabilities
     confidences = F.softmax(confidences, dim=-1)
 
     picked_box_probs = []

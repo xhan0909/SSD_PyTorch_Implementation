@@ -120,7 +120,18 @@ def one_cycle_multibox(model, train_dl, valid_dl, priors, lr_optimal=1e-4,
 
 def training_loop_multibox(model, train_dl, valid_dl, priors, steps=3,
                            lr_optimal=1e-2, div_factor=25, epochs=10):
-    """ Training loop"""
+    """Training Loop. Learning rate slightly decreases with each step.
+
+    :param model: the model to be trained
+    :param train_dl: training data loader
+    :param valid_dl: validation data loader
+    :param priors: prior boxes
+    :param steps: number of steps
+    :param lr_optimal: optimal learning rate (selected by LR finder)
+    :param div_factor: division factor used by the one-cycle policy
+    :param epochs: number of epochs in each step
+    :return: None
+    """
     for i in range(steps):
         start = datetime.now()
         one_cycle_multibox(model, train_dl, valid_dl, priors,

@@ -1,6 +1,39 @@
 import torch
-from ..utils.__loss__ import multibox_loss, val_metrics_multibox
+from datetime import datetime
 from ..utils.__utils__ import *
+from src.config import prior_box_cfg_SSD300 as config
+from src.config.cuda_cfg import device
+from ..utils.__loss__ import multibox_loss, val_metrics_multibox
+
+
+def diff_lr(lr, alpha=1/3):
+    return [lr*alpha**i for i in range(2, -1, -1)]
+
+
+def create_optimizer(model, lr_0):
+    """
+    Create an Adam optimizer whose learning rate can be updated later.
+
+    :param model: NN model
+    :param lr_0: start learning rate
+    :return: Adam optimizer
+    """
+    param_groups = [list(model.groups[i].parameters()) for i in range(3)]
+    params = [{'params': p, 'lr': lr}
+              for p, lr in zip(param_groups, diff_lr(lr_0))]
+    return optim.Adam(params)
+
+
+def update_optimizer(optimizer, group_lrs):
+    """
+    Update optimizer to use differential learning rate.
+
+    :param optimizer: optimizer
+    :param group_lrs: learning rates for each group
+    :return: None
+    """
+    for i, param_group in enumerate(optimizer.param_groups):
+        param_group["lr"] = group_lrs[i]
 
 
 def get_optimizer(model, lr=1e-2, mom=0.9):
@@ -29,7 +62,7 @@ def LR_range_finder_multibox(model, train_dl, priors, lr_low=1e-6, lr_high=1, ep
     :return:
     """
     losses = []
-    p = PATH/"model_tmp.pth"
+    p = "./model_tmp.pth"
     save_model(model, str(p))
     iterations = epochs * len(train_dl)
     lrs = lr_range(slice(lr_low, lr_high), iterations)
@@ -38,21 +71,22 @@ def LR_range_finder_multibox(model, train_dl, priors, lr_low=1e-6, lr_high=1, ep
     for i in range(epochs):
         for x, y_label, y_loc in train_dl:
             optim = get_optimizer(model, lr=lrs[ind])
-            x = x.cuda().float()
-            y_label = y_label.cuda().long()
-            y_loc = y_loc.cuda().float()
+            x = x.to(device).float()
+            y_label = y_label.to(device).long()
+            y_loc = y_loc.to(device).float()
             confidences, locations = model(x)
             l1_loss, ce_loss = multibox_loss(confidences, locations,
                                              y_label, y_loc, priors,
-                                             num_classes=21, neg_pos_ratio=3)
+                                             num_classes=config.num_classes,
+                                             neg_pos_ratio=config.neg_pos_ratio)
             loss = l1_loss + ce_loss
             optim.zero_grad()
             loss.backward()
             optim.step()
             losses.append(loss.item())
-            ind +=1
+            ind += 1
     load_model(model, str(p))
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
     return lrs, losses
 
 
@@ -74,8 +108,10 @@ def one_cycle_multibox(model, train_dl, valid_dl, priors, lr_optimal=1e-4,
     :return: None
     """
     iterations = epochs * len(train_dl)
-    lrs = get_triangular_lr(lr_optimal, div_factor, iterations)
+    # lrs = get_triangular_lr(lr_optimal, div_factor, iterations)
     moms = get_triangular_mom(0.85, 0.95, iterations)
+    lrs = get_cosine_triangular_lr(lr_optimal, div_factor, iterations)
+    # optim = create_optimizer(model, lrs[0])
 
     idx = 0
 
@@ -88,14 +124,17 @@ def one_cycle_multibox(model, train_dl, valid_dl, priors, lr_optimal=1e-4,
         total = len(train_dl)
         for i, (x, y_label, y_loc) in enumerate(train_dl):
             optim = get_optimizer(model, lr=lrs[idx], mom=moms[idx])
-            x = x.cuda().float()
-            y_label = y_label.cuda().long()
-            y_loc = y_loc.cuda().float()
+            # lr = lrs[idx]
+            # update_optimizer(optim, [lr/9, lr/3, lr])
+            x = x.to(device).float()
+            y_label = y_label.to(device).long()
+            y_loc = y_loc.to(device).float()
             confidences, locations = model(x)
             l1_loss, ce_loss = multibox_loss(confidences, locations, y_label,
                                              y_loc, priors,
-                                             num_classes=21, neg_pos_ratio=3)
-            loss = l1_loss + ce_loss / 5  # balance the two losses
+                                             num_classes=config.num_classes,
+                                             neg_pos_ratio=config.neg_pos_ratio)
+            loss = l1_loss + ce_loss  # balance the two losses
             optim.zero_grad()
             loss.backward()
             optim.step()
@@ -110,15 +149,15 @@ def one_cycle_multibox(model, train_dl, valid_dl, priors, lr_optimal=1e-4,
         avg_clf_loss = running_ce_loss / total
         print(
             f"Epoch: {epoch+1} | " +
-            f"Avg Training Loss: {avg_loss:.4f} | " +
-            f"Avg Regression Loss {avg_reg_loss:.4f} | " +
-            f"Avg Classification Loss: {avg_clf_loss:.4f}"
+            f"Avg L1 Loss {avg_reg_loss:.4f} | " +
+            f"Avg CE Loss: {avg_clf_loss:.4f} | " +
+            f"Avg Training Loss: {avg_loss:.4f}"
         )
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         val_metrics_multibox(model, valid_dl, priors)
 
 
-def training_loop_multibox(model, train_dl, valid_dl, priors, steps=3,
+def training_loop_multibox(model, train_dl, valid_dl, priors, steps=1,
                            lr_optimal=1e-2, div_factor=25, epochs=10):
     """Training Loop. Learning rate slightly decreases with each step.
 
@@ -135,7 +174,7 @@ def training_loop_multibox(model, train_dl, valid_dl, priors, steps=3,
     for i in range(steps):
         start = datetime.now()
         one_cycle_multibox(model, train_dl, valid_dl, priors,
-                           lr_optimal/(i+1), div_factor, epochs)
+                           lr_optimal/(i+3), div_factor, epochs)
         end = datetime.now()
         t = 'Time elapsed {}'.format(end - start)
         print("----End of step", t)

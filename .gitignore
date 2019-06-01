@@ -1,3 +1,5 @@
 .ipynb_checkpoints/
 VOCdevkit/*
 .DS_Store
+src/transform/__pycache__/*
+src/utils/__pycache__/*

@@ -1,16 +1,19 @@
-import torch
 import math
-import numpy as np
+import torch
 import itertools
+import numpy as np
 from typing import *
 from collections import defaultdict
+
+import src.config.prior_box_cfg_SSD300 as config
 
 
 # Bounding boxes
 def make_bb_px(y, x_shape):
-    """Makes an image of size x rectangular bounding box"""
+    """Makes an image of size x rectangular bounding box (hw format)"""
     Y = np.zeros(x_shape)
-    y = hw_bb(y).astype(np.int)
+    y = hw_bb_numpy(y).astype(np.int)
+    y = np.array(list(map(lambda x: x if x > 0 else 0, y)))  # clip to 0
     Y[y[0]:y[2], y[1]:y[3]] = 1.
     return Y
 
@@ -21,13 +24,24 @@ def to_bb(Y):
     Assumes 0 as background nonzero object
     """
     cols, rows = np.nonzero(Y)
-    if len(cols) == 0: return np.zeros(4, dtype=np.float32)
+    if len(cols) == 0:
+        return np.zeros(4, dtype=np.float32)
     top_row = np.min(rows)
     left_col = np.min(cols)
     bottom_row = np.max(rows)
     right_col = np.max(cols)
     return np.array([left_col, top_row, right_col, bottom_row],
                     dtype=np.float32)
+
+
+def hw_bb_numpy(bb):
+    if len(bb.shape) == 1:
+        return np.array([bb[1], bb[0], bb[3] + bb[1] - 1, bb[2] + bb[0] - 1])
+    else:
+        return np.array([bb[..., 1],
+                         bb[..., 0],
+                         bb[..., 3] + bb[..., 1] - 1,
+                         bb[..., 2] + bb[..., 0] - 1])
 
 
 def hw_bb(bb: torch.Tensor) -> torch.Tensor:
@@ -48,9 +62,13 @@ def bb_hw_numpy(bb: np.array) -> np.array:
     width-height: [X, Y, width, height]
     corner format: [Y_0, X_0, Y_right_bottom, X_right_bottom]
     """
-    return np.array([bb[..., 1], bb[..., 0],
-                      bb[..., 3] - bb[..., 1] + 1,
-                      bb[..., 2] - bb[..., 0] + 1], dtype=np.float32)
+    if len(bb.shape) == 1:
+        return np.array([bb[1], bb[0], bb[3] - bb[1] + 1, bb[2] - bb[0] + 1])
+    else:
+        return np.array([bb[..., 1],
+                         bb[..., 0],
+                         bb[..., 3] - bb[..., 1] + 1,
+                         bb[..., 2] - bb[..., 0] + 1], dtype=np.float32)
 
 
 def bb_hw(bb: torch.Tensor) -> torch.Tensor:
@@ -108,6 +126,14 @@ def hw_center(bb: torch.Tensor) -> torch.Tensor:
 
 
 def to_absolute_coords(image_shape, boxes=None, labels=None):
+    """
+    Change percentage box coordinates to absolute coordinates.
+
+    :param image_shape: (height, width)
+    :param boxes: any format
+    :param labels: default None
+    :return: converted boxes and labels (optional)
+    """
     height, width = image_shape
     boxes[..., 0] *= width
     boxes[..., 2] *= width
@@ -118,6 +144,14 @@ def to_absolute_coords(image_shape, boxes=None, labels=None):
 
 
 def to_percent_coords(image_shape, boxes=None, labels=None):
+    """
+    Change absolute box coordinates to percentage coordinates.
+
+    :param image_shape: (height, width)
+    :param boxes: any format
+    :param labels: default None
+    :return: converted boxes and labels (optional)
+    """
     height, width = image_shape
     boxes[..., 0] /= width
     boxes[..., 2] /= width
@@ -128,19 +162,12 @@ def to_percent_coords(image_shape, boxes=None, labels=None):
 
 
 # Prior boxes
-def generate_ssd_priors(specs, image_size=300, clip=True):
+def generate_ssd_priors(specs, image_size, clip=True):
     """
-    Generate center format SSD Prior Boxes.
+    Generate center format SSD Prior Boxes, [cx, cy, height, width]
+    Total number of boxes: 38*38*4 + 19*19*6 + 10*10*6 + 5*5*6 + 3*3*4 + 1*1*4
 
-    :param specs: Specs about the shapes of sizes of prior boxes. i.e.
-                    specs = [
-                        Spec(38, 8, SSDBoxSizes(30, 60), [2]),
-                        Spec(19, 16, SSDBoxSizes(60, 111), [2, 3]),
-                        Spec(10, 32, SSDBoxSizes(111, 162), [2, 3]),
-                        Spec(5, 64, SSDBoxSizes(162, 213), [2, 3]),
-                        Spec(3, 100, SSDBoxSizes(213, 264), [2]),
-                        Spec(1, 300, SSDBoxSizes(264, 315), [2])
-                    ]
+    :param specs: Specs about the shapes of sizes of prior boxes.
     :param image_size: image size.
     :param clip: boolean
 
@@ -152,6 +179,8 @@ def generate_ssd_priors(specs, image_size=300, clip=True):
     boxes = []
     for spec in specs:
         scale = image_size / spec.shrinkage
+        # initialize the center of prior boxes of the current level
+        # (0, 0) to (feature_map_size, feature_map_size)
         for j, i in itertools.product(range(spec.feature_map_size), repeat=2):
             x_center = (i + 0.5) / scale
             y_center = (j + 0.5) / scale
@@ -177,8 +206,8 @@ def generate_ssd_priors(specs, image_size=300, clip=True):
             ])
 
             # change h/w ratio of the small sized box
-            # based on the SSD implementation, it only applies ratio to the smallest size.
-            # it looks weird.
+            # based on the SSD implementation
+            # it only applies ratio to the smallest size.
             size = spec.box_sizes.min
             h = w = size / image_size
             for ratio in spec.aspect_ratios:
@@ -218,12 +247,17 @@ def iou_of(gt, pred):
     """
     Return intersection-over-union (Jaccard index) of boxes.
 
-    :param gt: ground truth boxes [Y_0, X_0, Y_right_bottom, X_right_bottom]
-    :param pred: predicted boxes [Y_0, X_0, Y_right_bottom, X_right_bottom]
+    :param gt: ground truth boxes, center format, [cX, cY, height, width]
+    :param pred: predicted boxes, center format, [cX, cY, height, width]
     :param epsilon: a small number to avoid 0 as denominator.
     :return: IoU values.
     """
     epsilon = 1e-10
+
+    # convert center format to corner format
+    gt = center_bb(gt)
+    pred = center_bb(pred)
+
     overlap_left_top = torch.max(gt[..., :2], pred[..., :2])
     overlap_right_bottom = torch.min(gt[..., 2:], pred[..., 2:])
 
@@ -245,15 +279,16 @@ def match_prior_with_truth(gt_boxes, gt_labels, priors, iou_threshold=0.5):
                 i = argmax(ious)
                 match the prior with ground_truth_boxes[i]
 
-    :param gt_boxes: ground truth boxes, [Y_0, X_0, Y_right_bottom, X_right_bottom]
-    :param gt_labels: labels of targets, [Y_0, X_0, Y_right_bottom, X_right_bottom]
-    :param priors: corner format prior boxes, [Y_0, X_0, Y_right_bottom, X_right_bottom]
+    :param gt_boxes: ground truth boxes, center format, [cX, cY, height, width]
+    :param gt_labels: labels of targets
+    :param priors: center format prior boxes, [cX, cY, height, width]
     :param iou_threshold: IoU threshold, default 0.5
     :return:
-        boxes (num_priors, 4): real values for priors, corner format
+        boxes (num_priors, 4): real values for priors, center format
         labels (num_priros): labels for priors.
 
-    Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
+    Reference:
+    https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
     # size: num_priors x num_targets
     ious = iou_of(gt_boxes.unsqueeze(0), priors.unsqueeze(1))
@@ -377,7 +412,7 @@ def hard_nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
     """
     Non-Maximum Suppression.
 
-    :param box_scores: boxes in corner-form and probabilities.
+    :param box_scores: boxes in center-form and probabilities.
     :param iou_threshold: intersection over union threshold.
     :param top_k: keep top_k results. If k <= 0, keep all the results.
     :param candidate_size: only consider the candidates with the highest scores.
@@ -385,24 +420,24 @@ def hard_nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
 
     Source: https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
     """
-    probs = box_scores[:, -1] # predicted probability of each box
-    boxes = box_scores[:, :4] # box location
+    probs = box_scores[:, -1]  # predicted probability of each box
+    boxes = box_scores[:, :4]  # box location
     boxes_to_keep = []
     _, indexes = probs.sort(descending=True)
     indexes = indexes[:candidate_size]
     while len(indexes) > 0:
-        current = indexes[0]
+        current = indexes[0]  # index of current largest val
         boxes_to_keep.append(current.item())
         if 0 < top_k == len(boxes_to_keep) or len(indexes) == 1:
             break
         current_box = boxes[current, :]
-        indexes = indexes[1:]
+        indexes = indexes[1:]  # remove kept element from view
         rest_boxes = boxes[indexes, :]
         iou = iou_of(
-            rest_boxes,
-            current_box.unsqueeze(0)
+            center_bb(rest_boxes),
+            center_bb(current_box.unsqueeze(0))
         )
-        # pruning
+        # pruning, keep only elements with an IoU <= overlap
         indexes = indexes[iou <= iou_threshold]
 
     return box_scores[boxes_to_keep, :]
@@ -416,10 +451,10 @@ def soft_nms(box_scores, score_threshold, sigma=0.5, top_k=-1):
         https://github.com/facebookresearch/Detectron/blob/master/detectron/utils/cython_nms.pyx
         https://github.com/qfgaohao/pytorch-ssd/blob/master/vision/utils/box_utils.py
 
-    :param box_scores: (N, 5), boxes in corner-form and probabilities.
+    :param box_scores: (N, 5), boxes in center-form and probabilities.
     :param score_threshold: boxes with scores less than value are not considered.
     :param sigma: the parameter in score re-computation.
-                  scores[i] = scores[i] * exp(-(iou_i)^2 / simga)
+                  scores[i] = scores[i] * exp(-(iou_i)^2 / sigma)
     :param top_k: keep top_k results. If k <= 0, keep all the results.
 
     :return picked_box_scores: (K, 5), results of NMS.
@@ -432,10 +467,11 @@ def soft_nms(box_scores, score_threshold, sigma=0.5, top_k=-1):
         picked_box_scores.append(cur_box_prob)
         if 0 < top_k == len(picked_box_scores) or box_scores.size(0) == 1:
             break
-        cur_box = cur_box_prob[:-1]
+        cur_box = center_bb(cur_box_prob[:-1])
         box_scores[max_score_index, :] = box_scores[-1, :]
         box_scores = box_scores[:-1, :]
-        ious = iou_of(cur_box.unsqueeze(0), box_scores[:, :-1])
+        ious = iou_of(center_bb(cur_box.unsqueeze(0)),
+                      center_bb(box_scores[:, :-1]))
 
         # update the pruning step with a Gaussian penalty function
         box_scores[:, -1] = box_scores[:, -1] * torch.exp(-(ious * ious) / sigma)

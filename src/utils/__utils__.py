@@ -1,8 +1,11 @@
+import time
 import torch
-import numpy as np
 import itertools
-from collections import defaultdict
+import numpy as np
 from typing import *
+from collections import defaultdict
+
+from src.config.cuda_cfg import device
 
 
 def extract_metadata(json_path: str):
@@ -42,6 +45,14 @@ def lr_range(lr: Union[float, slice], n) -> np.ndarray:
 
 
 def get_triangular_lr(lr_optimal, div_factor, iterations):
+    """
+    Triangular learning rate.
+
+    :param lr_optimal: optimal learning rate found by LR finder
+    :param div_factor: division factor
+    :param iterations: number of iterations
+    :return: an array of learning rates
+    """
     iter1 = int(0.45 * iterations)
     iter2 = int(1.0 * iter1)
     iter3 = iterations - iter1 - iter2
@@ -59,7 +70,38 @@ def get_triangular_lr(lr_optimal, div_factor, iterations):
     return lrs1 + lrs2 + lrs3
 
 
+def cosine_segment(start_lr, end_lr, iterations):
+    i = np.arange(iterations)
+    c_i = 1 + np.cos(i*np.pi/iterations)
+    return end_lr + (start_lr - end_lr)/2 * c_i
+
+
+def get_cosine_triangular_lr(lr_optimal, div_factor, iterations):
+    """
+    Triangular learning rate with cosine affine.
+
+    :param lr_optimal: optimal learning rate found by LR finder
+    :param div_factor: division factor
+    :param iterations: number of iterations
+    :return: an array of learning rates
+    """
+    min_start, min_end = lr_optimal / div_factor, lr_optimal / (div_factor*1e4)
+    iter1 = int(0.3*iterations)
+    iter2 = iterations - iter1
+    segs = [cosine_segment(min_start, lr_optimal, iter1),
+            cosine_segment(lr_optimal, min_end, iter2)]
+    return np.concatenate(segs)
+
+
 def get_triangular_mom(mom_low=0.85, mom_high=0.95, iterations=50):
+    """
+    Triangular momentum.
+
+    :param mom_low: lower bound momentum
+    :param mom_high: higher bound momentum
+    :param iterations: number of iterations
+    :return: an array of momentum values
+    """
     iter1 = int(0.45 * iterations)
     iter2 = int(1.0 * iter1)
     iter3 = iterations - iter1 - iter2
@@ -78,10 +120,10 @@ def save_model(m, p):
 
 
 def load_model(m, p):
-    checkpoint = torch.load(p)
+    checkpoint = torch.load(p, map_location=device)
     m.load_state_dict(checkpoint)
     del checkpoint
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
 
 
 def set_trainable_attr(m, b=True):
@@ -89,6 +131,27 @@ def set_trainable_attr(m, b=True):
         p.requires_grad = b
 
 
-def unfreeze(model, l):
+def unfreeze_top_model(model, l):
     top_model = model.top_model
     set_trainable_attr(top_model[l])
+
+
+def unfreeze_vgg_extra(model, l):
+    vgg_extra = model.extra2
+    set_trainable_attr(vgg_extra[:l])
+
+
+class Timer:
+    def __init__(self):
+        self.clock = {}
+
+    def start(self, key="default"):
+        self.clock[key] = time.time()
+
+    def end(self, key="default"):
+        if key not in self.clock:
+            raise Exception(f"{key} is not in the clock.")
+        interval = time.time() - self.clock[key]
+        del self.clock[key]
+
+        return interval

@@ -3,12 +3,16 @@ import cv2
 import json
 import math
 import random
+import itertools
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
+from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib import patches, patheffects
 
-from src.transform.__boxtools__ import make_bb_px, to_bb
+from src.transform.__boxtools__ import (make_bb_px, to_bb, bb_hw_numpy,
+                                        hw_bb_numpy)
 
 
 # Read images
@@ -73,7 +77,7 @@ def show_by_index(idx: int, annotations: dict):
             draw_text(ax, b[:2], categories[item[0]])
 
 
-def resize_img_and_write(orig_im_paths, resized_im_path, new_size):
+def resize_img_and_write(img_list, resized_im_path, new_size):
     """Resize the original images and write the resized images
     to a new directory.
 
@@ -82,14 +86,7 @@ def resize_img_and_write(orig_im_paths, resized_im_path, new_size):
     :param new_size: target image size
     :return: None
     """
-    paths = []
-    with open(orig_im_paths, 'r') as f:
-        while True:
-            path = f.readline()
-            if not path: break
-            paths.append(path.strip("'\n"))
-
-    for path in tqdm(paths):
+    for path in tqdm(img_list):
         img = cv2.imread(str(path))
         x_resized = cv2.resize(img, (int(new_size), int(new_size)))
         fname = str(path).split('/')[-1]
@@ -105,7 +102,7 @@ def resize_bbox(orig_shape, bbox, target_size):
     :param orig_shape: shape of original image
     :param bbox: bounding boxes
     :param target_size: size of the resized image
-    :return: new boxes (String)
+    :return: new boxes (corner format)
     """
     Y = make_bb_px(bbox, orig_shape)
     y_resize = cv2.resize(Y, target_size)
@@ -115,3 +112,40 @@ def resize_bbox(orig_shape, bbox, target_size):
     y[1], y[3] = (np.clip(y[1], 0, target_size[1]),
                   np.clip(y[3], 0, target_size[1]))
     return y
+
+
+def crop_imgs(img, y=None, size=300, bbox=False):
+    h, w, _ = img.shape
+    rescaled_images = [(img, h, w)]
+    if bbox and y is not None:
+        Y = make_bb_px(y, (h, w))
+
+    # get crops
+    hs = itertools.product([i * size for i in range(int(h / size) + 1)],
+                           [min((i + 1) * size, h) for i in
+                            range(int(h / size) + 1)])
+    ws = itertools.product([i * size for i in range(int(w / size) + 1)],
+                           [min((i + 1) * size, w) for i in
+                            range(int(w / size) + 1)])
+    hs_new = [h for h in hs if h[0] != h[1] and h[1] - size <= h[0] < h[1]]
+    ws_new = [w for w in ws if w[0] != w[1] and w[1] - size <= w[0] < w[1]]
+    all_sub_img = list(itertools.product(hs_new, ws_new))
+
+    # make crops
+    if bbox:
+        rescaled_images = [(img[h[0]:h[1], w[0]:w[1]],
+                            bb_hw_numpy(to_bb(Y[h[0]:h[1], w[0]:w[1]]))) for
+                           h, w in all_sub_img]
+    else:
+        rescaled_images = [(img[h[0]:h[1], w[0]:w[1]], (h, w)) for h, w in
+                           all_sub_img]
+
+    return rescaled_images
+
+
+def zero_padding(img, size):
+    r, c, _ = img.shape
+    padding = np.zeros((size, size, 3)).astype(np.float32)
+    padding[:r, :c, :] = img.astype(np.float32)
+
+    return padding

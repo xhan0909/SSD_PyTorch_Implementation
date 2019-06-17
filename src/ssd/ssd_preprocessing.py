@@ -12,16 +12,16 @@ class TrainTransform:
         self.std = std
         self.size = size
         self.augment = Compose([
-            # ConvertFromInts(),
-            # PhotometricDistort(),
+            ConvertFromInts(),
+            PhotometricDistort(),
             # Expand(self.mean),
-            # RandomFlip(),
-            # RandomRotate(),
+            RandomFlip(),
+            RandomRotate(),
             # RandomSampleCrop(),
             # Resize(self.size),
             # SubtractMeans(self.mean),
-            # lambda img, boxes=None, labels=None: (img / std, boxes, labels),
-            Normalize(),
+            lambda img, boxes=None, labels=None: (img / std, boxes, labels),
+            # Normalize(),
             ToTensor(),
         ])
 
@@ -40,7 +40,8 @@ class ValidTransform:
         self.std = std
         self.size = size
         self.transform = Compose([
-            # SubtractMeans(mean),
+            # ConvertFromInts(),
+            # PhotometricDistort(),
             # lambda img, boxes=None, labels=None: (img / std, boxes, labels),
             ToTensor(),
         ])

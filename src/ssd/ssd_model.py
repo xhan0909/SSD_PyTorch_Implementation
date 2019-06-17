@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from .l2norm import L2Norm
 
 
-# ========= Need refactor ============
 class SSDNet(nn.Module):
     def __init__(self, num_classes, im_shape, is_test=False):
         super(SSDNet, self).__init__()
@@ -36,6 +35,7 @@ class SSDNet(nn.Module):
         layers_2 = vgg16.features[23:30]
         self.extra2 = nn.Sequential(
             *layers_2,  # apply vgg up to fc7
+            nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
             nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(1024),
@@ -162,10 +162,11 @@ class SSDNet(nn.Module):
         return confidences, locations
 
     def compute_header(self, X_cls, X_reg):
-        X_conf = X_cls.permute(0, 2, 3, 1).contiguous()
-        X_conf = X_conf.view(X_conf.size(0), -1, self.num_classes)
-        X_location = X_reg.permute(0, 2, 3, 1).contiguous()
-        X_location = X_location.view(X_location.size(0), -1, 4)
+        X_cls = X_cls.permute(0, 2, 3, 1).contiguous()
+        X_conf = X_cls.view(X_cls.size(0), -1, self.num_classes)
+
+        X_reg = X_reg.permute(0, 2, 3, 1).contiguous()
+        X_location = X_reg.view(X_reg.size(0), -1, 4)
 
         return X_conf, X_location
 

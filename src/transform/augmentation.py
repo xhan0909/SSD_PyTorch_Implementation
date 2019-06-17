@@ -188,7 +188,7 @@ class ConvertColor(object):
 
 
 class RandomContrast(object):
-    def __init__(self, lower=0.5, upper=1.5):
+    def __init__(self, lower=0.9, upper=1.5):
         self.lower = lower
         self.upper = upper
         assert self.upper >= self.lower, "contrast upper must be >= lower."
@@ -203,15 +203,15 @@ class RandomContrast(object):
 
 
 class RandomBrightness(object):
-    def __init__(self, delta=32):
+    def __init__(self, delta=0.5):
         assert delta >= 0.0
         assert delta <= 255.0
         self.delta = delta
 
     def __call__(self, image, boxes=None, labels=None):
         if random.randint(2):
-            delta = random.uniform(-self.delta, self.delta)
-            image += delta
+            delta = random.uniform(0, self.delta*1.2)
+            image *= (1 + delta)
         return image, boxes, labels
 
 

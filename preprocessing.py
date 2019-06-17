@@ -14,6 +14,17 @@ from src.transform.__boxtools__ import *
 from src.transform.__imgtools__ import resize_bbox, resize_img_and_write
 
 
+def get_all_images(path):
+    img_list = []
+    # p = Path('/data/xhan/Dropbox/USF MantaRay Data Share/Image Training Data')
+    p = Path(path)
+    for fname in p.glob('*/Microfibers/*.jp*'):  # we have both .jpg and .jpeg
+        if 'Fall Testing Samples' not in str(fname):
+            img_list.append(str(fname))
+
+    return img_list
+
+
 def make_anno_dict(anno_json):
     """
     Convert json annotation file to dictionary.
@@ -58,7 +69,7 @@ def prepare_dataset(dict_anno, target_im_path):
 
 def resize_annotation_bbox(df, target_size):
     """Generate new annotation data frame with resized image path
-    and new bounding boxes' coordinates.
+    and new bounding boxes' coordinates (hw format).
 
     :param df: annotation data frame
     """
@@ -66,20 +77,25 @@ def resize_annotation_bbox(df, target_size):
     y_new = []
     for i, bbox in enumerate(df['bbox']):
         path = df['fn_orig'][i]
-        # in case the original images may have different sizes
+        # the original microfiber images has different sizes
         img = cv2.imread(str(path))
         r, c, _ = img.shape  # original img size
         y = np.array([int(b) for b in bbox.split()])
         if len(y) == 4:
-            y_new.append(resize_bbox((r, c), y, (target_size, target_size)))
+            new_bb = bb_hw_numpy(resize_bbox((r, c), y,
+                                             (target_size, target_size)))
+            y_new.append(' '.join([str(int(n)) for n in new_bb]))
         elif len(y) > 4:
+            temp_bbs = []
             for j in range(int(len(y) / 4)):
-                resized_bb = resize_bbox((r, c), y[j * 4:(j * 4 + 4)],
-                                         (target_size, target_size))
+                resized_bb = bb_hw_numpy(resize_bbox((r, c),
+                                                     y[j * 4:(j * 4 + 4)],
+                                                     (target_size, target_size)))
                 resized_bb = ' '.join([str(int(n)) for n in resized_bb])
-            y_new.append(' '.join(resized_bb))
+                temp_bbs.append(resized_bb)
+            y_new.append(' '.join(temp_bbs))
 
-    df['bbox_300'] = y_new
+    df['bbox_resized'] = y_new
 
 
 if __name__ == '__main__':
@@ -88,7 +104,7 @@ if __name__ == '__main__':
     parser.add_argument("resized_im_path", help="resized image path")
     parser.add_argument("json_path", help="json format annotation path")
     parser.add_argument("df_path", help="annotation data frame path")
-    parser.add_argument("target_size", help="target image size after resizing")
+    parser.add_argument("target_size", help="target image size: 300/512")
 
     args = parser.parse_args()
 
@@ -97,8 +113,13 @@ if __name__ == '__main__':
 
     # resize images to target size
     print('Resizing images...')
-    resize_img_and_write(args.orig_im_path, args.resized_im_path,
+    # '/data/xhan/Dropbox/USF MantaRay Data Share/Image Training Data'
+    img_list = get_all_images(args.orig_im_path)
+    resize_img_and_write(img_list, args.resized_im_path,
                          args.target_size)
+
+    # target size
+    t_size = int(args.target_size)
 
     # make annotation dictionary with original image and bboxes
     print('Making annotations with resized images...')
@@ -112,12 +133,12 @@ if __name__ == '__main__':
 
     # resize bounding boxes accordingly
     print('Updating annotations with resized bounding boxes...')
-    resize_annotation_bbox(train_bbox_multi_df, args.target_size)
-    resize_annotation_bbox(val_bbox_multi_df, args.target_size)
+    resize_annotation_bbox(train_bbox_multi_df, t_size)
+    resize_annotation_bbox(val_bbox_multi_df, t_size)
     print('Annotations updated!')
 
     # write resized boxes to csv for future use
     print('Saving annotations to csv files...')
-    train_bbox_multi_df.to_csv(Path(args.df_path)/'train_anno.csv', index=False)
-    val_bbox_multi_df.to_csv(Path(args.df_path)/'val_anno.csv', index=False)
+    train_bbox_multi_df.to_csv(Path(args.df_path)/f'train_anno_{t_size}.csv', index=False)
+    val_bbox_multi_df.to_csv(Path(args.df_path)/f'val_anno_{t_size}.csv', index=False)
     print('Preprocessing completed. Exit...')

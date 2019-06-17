@@ -16,10 +16,7 @@ class multiBboxDataset(Dataset):
         self.sz = sz
         self.transform = transform
         self.target_transform = target_transform
-        self.classes = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus',
-                        'car', 'cat', 'chair', 'cow', 'diningtable', 'dog',
-                        'horse', 'motorbike', 'person', 'pottedplant', 'sheep',
-                        'sofa', 'train', 'tvmonitor', 'background']
+        self.classes = ['background', 'microfiber']
         self.class_dict = {i: class_name for i, class_name in
                            enumerate(self.classes)}
 
@@ -59,7 +56,7 @@ class multiBboxDataset(Dataset):
             anno_dict = dict()
             anno_dict['img_name'] = row[1].split('/')[-1]
             anno_dict['labels'] = np.array([int(x) for x in row[2].split()])
-            bbs = row[4].split()
+            bbs = row[-1].split()
             anno_dict['boxes'] = np.array(
                 [bbs[i * 4:i * 4 + 4] for i in range(int(len(bbs) / 4))],
                 dtype=np.float)
